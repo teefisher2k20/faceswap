@@ -15,8 +15,7 @@ import typing as T
 from shutil import which
 from subprocess import PIPE, Popen, run, STDOUT
 
-from pkg_resources import parse_requirements
-
+from packaging.requirements import Requirement
 from lib.logger import log_setup
 
 logger = logging.getLogger(__name__)
@@ -25,7 +24,8 @@ backend_type: T.TypeAlias = T.Literal['nvidia', 'apple_silicon', 'directml', 'cp
 _INSTALL_FAILED = False
 # Packages that are explicitly required for setup.py
 _INSTALLER_REQUIREMENTS: list[tuple[str, str]] = [("pexpect>=4.8.0", "!Windows"),
-                                                  ("pywinpty==2.0.2", "Windows")]
+                                                  ("pywinpty==2.0.2", "Windows"),
+                                                  ("packaging", "")]
 # Conda packages that are required for a specific backend
 # TODO zlib-wapi is required on some Windows installs where cuDNN complains:
 # Could not locate zlibwapi.dll. Please make sure it is in your library path!
@@ -192,8 +192,8 @@ class Environment():
         if self.updater:
             return
 
-        if not ((3, 10) <= sys.version_info < (3, 11) and self.py_version[1] == "64bit"):
-            logger.error("Please run this script with Python version 3.10 64bit and try "
+        if not ((3, 10) <= sys.version_info < (3, 13) and self.py_version[1] == "64bit"):
+            logger.error("Please run this script with Python version 3.10 to 3.12 64bit and try "
                          "again.")
             sys.exit(1)
 
@@ -323,8 +323,8 @@ class Packages():
         all_installed = self._all_installed_packages
         candidates = self._format_requirements(
             [pkg for pkg, plat in _INSTALLER_REQUIREMENTS
-             if self._env.os_version[0] == plat or (plat[0] == "!" and
-                                                    self._env.os_version[0] != plat[1:])])
+             if plat == "" or self._env.os_version[0] == plat or (plat.startswith("!") and
+                                                                  self._env.os_version[0] != plat[1:])])
         retval = [(pkg, spec) for pkg, spec in candidates
                   if pkg not in all_installed or (
                     pkg in all_installed and
@@ -389,8 +389,8 @@ class Packages():
                              ) -> list[tuple[str, list[tuple[str, str]]]]:
         """ Parse a list of requirements.txt formatted package strings to a list of pkgresource
         formatted requirements """
-        return [(package.unsafe_name, package.specs)
-                for package in parse_requirements(packages)
+        return [(package.name, list(package.specifier))
+                for package in (Requirement(pkg) for pkg in packages)
                 if package.marker is None or package.marker.evaluate()]
 
     @classmethod
@@ -415,8 +415,8 @@ class Packages():
         if not required:
             return True
 
-        return all(ops[spec[0]]([int(s) for s in existing.split(".")],
-                                [int(s) for s in spec[1].split(".")])
+        return all(ops[spec.operator]([int(s) for s in existing.split(".")],
+                                      [int(s) for s in spec.version.split(".")])
                    for spec in required)
 
     def _get_installed_packages(self) -> dict[str, str]:
@@ -469,8 +469,8 @@ class Packages():
             requirements_file = os.path.join(pypath, "requirements", req_file)
             with open(requirements_file, encoding="utf8") as req:
                 for package in req.readlines():
-                    package = package.strip()
-                    if package and (not package.startswith(("#", "-r"))):
+                    package = package.split("#")[0].strip()
+                    if package and not package.startswith("-r"):
                         requirements.append(package)
 
         self._required_packages = self._format_requirements(requirements)
@@ -486,8 +486,8 @@ class Packages():
         if len(cudnn_inst) == 1:  # Sometimes only major version is reported
             cudnn_inst = f"{cudnn_inst}.0"
         for key, val in _TENSORFLOW_REQUIREMENTS.items():
-            cuda_req = next(parse_requirements(f"cuda{val[0]}")).specs
-            cudnn_req = next(parse_requirements(f"cudnn{val[1]}")).specs
+            cuda_req = Requirement(f"cuda{val[0]}").specifier
+            cudnn_req = Requirement(f"cudnn{val[1]}").specifier
             if (self._validate_spec(cuda_req, cuda_inst)
                     and self._validate_spec(cudnn_req, cudnn_inst)):
                 tf_ver = key
@@ -499,7 +499,7 @@ class Packages():
             self._required_packages = [pkg for pkg in self._required_packages
                                        if pkg[0] != "tensorflow"]
             tf_ver = f"tensorflow{tf_ver}"
-            self._required_packages.append(("tensorflow", next(parse_requirements(tf_ver)).specs))
+            self._required_packages.append(("tensorflow", Requirement(tf_ver).specifier))
             return
 
         logger.warning(
@@ -555,7 +555,7 @@ class Packages():
                                    if not pkg[0].startswith("tensorflow-rocm")]
         tf_ver = f"tensorflow-rocm{tf_ver}"
         self._required_packages.append(("tensorflow-rocm",
-                                        next(parse_requirements(tf_ver)).specs))
+                                        Requirement(tf_ver).specifier))
 
     def update_tf_dep(self) -> None:
         """ Update Tensorflow Dependency.
@@ -572,9 +572,9 @@ class Packages():
         if not self._env.is_conda:
             return
         for pkg in self._conda_required_packages:
-            reqs = next(parse_requirements(pkg[0]))  # TODO Handle '=' vs '==' for conda
-            key = reqs.unsafe_name
-            specs = reqs.specs
+            reqs = Requirement(pkg[0])  # TODO Handle '=' vs '==' for conda
+            key = reqs.name
+            specs = reqs.specifier
 
             if pkg[0] == "tk" and self._env.os_version[0].lower() == "linux":
                 # Default tk has bad fonts under Linux. We pull in an explicit build from
@@ -660,6 +660,8 @@ class Checks():  # pylint:disable=too-few-public-methods
 
     def _user_input(self) -> None:
         """ Get user input for AMD/DirectML/ROCm/Cuda/Docker """
+        if self._env.backend:
+            return
         self._directml_ask_enable()
         self._rocm_ask_enable()
         if not self._env.backend:
@@ -1061,7 +1063,7 @@ class Install():  # pylint:disable=too-few-public-methods
             sys.exit(1)
 
     @classmethod
-    def _format_package(cls, package: str, version: list[tuple[str, str]]) -> str:
+    def _format_package(cls, package: str, version: list) -> str:
         """ Format a parsed requirement package and version string to a format that can be used by
         the installer.
 
@@ -1077,7 +1079,7 @@ class Install():  # pylint:disable=too-few-public-methods
         str
             The formatted full package and version string
         """
-        retval = f"{package}{','.join(''.join(spec) for spec in version)}"
+        retval = f"{package}{','.join(str(spec) for spec in version)}"
         logger.debug("Formatted package \"%s\" version \"%s\" to \"%s'", package, version, retval)
         return retval
 
