@@ -21,6 +21,29 @@ if sys.platform.startswith("win"):
         windll.GetUserDefaultUILanguage()
     ]
 
+from lib.cli import args as cli_args  # pylint:disable=wrong-import-position
+from lib.cli.args_train import TrainArgs  # pylint:disable=wrong-import-position
+from lib.cli.args_extract_convert import ConvertArgs, ExtractArgs  # noqa:E501 pylint:disable=wrong-import-position
+from lib.config import generate_configs  # pylint:disable=wrong-import-position
+from lib.system import System  # pylint:disable=wrong-import-position
+
+# LOCALES
+_LANG = gettext.translation("faceswap", localedir="locales", fallback=True)
+_ = _LANG.gettext
+
+system = System()
+system.validate_python()
+
+_PARSER = cli_args.FullHelpArgumentParser()
+
+
+def _bad_args(*args) -> None:  # pylint:disable=unused-argument
+    """ Print help to console when bad arguments are provided. """
+    print(cli_args)
+    _PARSER.print_help()
+    sys.exit(0)
+
+
 def _main() -> None:
     """ The main entry point into Faceswap.
 
@@ -30,27 +53,7 @@ def _main() -> None:
     - Sets the default values and launches the relevant script.
     - Outputs help if invalid parameters are provided.
     """
-    from lib.cli import args as cli_args
-    from lib.cli.args_train import TrainArgs
-    from lib.cli.args_extract_convert import ConvertArgs, ExtractArgs
-    from lib.config import generate_configs
-    from lib.system import System
-
-    system = System()
-    system.validate_python()
-
     generate_configs()
-
-    _LANG = gettext.translation("faceswap", localedir="locales", fallback=True)
-    _ = _LANG.gettext
-
-    _PARSER = cli_args.FullHelpArgumentParser()
-
-    def _bad_args(*args) -> None:  # pylint:disable=unused-argument
-        """ Print help to console when bad arguments are provided. """
-        print(cli_args)
-        _PARSER.print_help()
-        sys.exit(0)
 
     subparser = _PARSER.add_subparsers()
     ExtractArgs(subparser, "extract",
