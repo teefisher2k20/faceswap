@@ -27,7 +27,7 @@ if os.name == "nt":
 
 # Posix (Linux, OS X)
 else:
-    import termios
+    import termios  # pylint:disable=import-error
     import atexit
     from select import select
 

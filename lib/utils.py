@@ -117,7 +117,11 @@ class _Backend():  # pylint:disable=too-few-public-methods
         while True:
             txt = ", ".join([": ".join([key, val.upper().replace("_", " ")])
                              for key, val in self._backends.items()])
-            selection = input(f"{txt}: ")
+            if not sys.stdin.isatty():
+                print("Non-interactive mode detected. Defaulting to CPU backend.")
+                selection = "1"
+            else:
+                selection = input(f"{txt}: ")
             if selection not in self._backends:
                 print(f"'{selection}' is not a valid selection. Please try again")
                 continue
