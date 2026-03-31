@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-""" Manages the widgets that hold the top 'viewer' area of the preview tool """
+"""Manages the widgets that hold the top 'viewer' area of the preview tool"""
 from __future__ import annotations
 import logging
 import os
@@ -7,7 +7,7 @@ import tkinter as tk
 import typing as T
 
 from tkinter import ttk
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, InitVar
 
 import cv2
 import numpy as np
@@ -15,11 +15,13 @@ from PIL import Image, ImageTk
 
 from lib.align import transform_image
 from lib.align.aligned_face import CenteringType
+from lib.logger import parse_class_init
 from lib.utils import get_module_objects
 from scripts.convert import ConvertItem
 
 
 if T.TYPE_CHECKING:
+    import numpy.typing as npt
     from .preview import Preview
 
 logger = logging.getLogger(__name__)
@@ -27,121 +29,133 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class _Faces:
-    """ Dataclass for holding faces """
-    filenames: list[str] = field(default_factory=list)
-    matrix: list[np.ndarray] = field(default_factory=list)
-    src: list[np.ndarray] = field(default_factory=list)
-    dst: list[np.ndarray] = field(default_factory=list)
-
-
-class FacesDisplay():  # pylint:disable=too-many-instance-attributes
-    """ Compiles the 2 rows of sample faces (original and swapped) into a single image
+    """Dataclass for holding faces
 
     Parameters
     ----------
-    app: :class:`Preview`
-        The main tkinter Preview app
-    size: int
+    size
         The size of each individual face sample in pixels
-    padding: int
-        The amount of extra padding to apply to the outside of the face
-
-    Attributes
-    ----------
-    update_source: bool
-        Flag to indicate that the source images for the preview have been updated, so the preview
-        should be recompiled.
-    source: list
-        The list of :class:`numpy.ndarray` source preview images for top row of display
-    destination: list
-        The list of :class:`numpy.ndarray` swapped and patched preview images for bottom row of
-        display
+    num_faces
+        The number of faces to be displayed in the preview window
     """
-    def __init__(self, app: Preview, size: int, padding: int) -> None:
-        logger.trace("Initializing %s: (app: %s, size: %s, padding: %s)",  # type: ignore
-                     self.__class__.__name__, app, size, padding)
+    num_faces: InitVar[int]
+    size: InitVar[int]
+
+    filenames: list[str] = field(default_factory=list)
+    matrix: npt.NDArray[np.float32] = field(init=False)
+    src: npt.NDArray[np.uint8] = field(init=False)
+    dst: npt.NDArray[np.uint8] = field(init=False)
+
+    def __post_init__(self, num_faces: int, size: int) -> None:
+        """Initialize the matrices based on input sizes"""
+        self.matrix = np.empty((num_faces, 2, 3), dtype=np.float32)
+        self.src = np.empty((num_faces, size, size, 3), dtype=np.uint8)
+        self.dst = np.empty((num_faces, size, size, 3), dtype=np.uint8)
+
+
+class FacesDisplay():  # pylint:disable=too-many-instance-attributes
+    """Compiles the 2 rows of sample faces (original and swapped) into a single image
+
+    Parameters
+    ----------
+    app
+        The main tkinter Preview app
+    size
+        The size of each individual face sample in pixels
+    padding
+        The amount of extra padding to apply to the outside of the face
+    num_faces
+        The number of faces to be displayed in the preview window
+    """
+    def __init__(self, app: Preview, size: int, padding: int, num_faces: int) -> None:
+        logger.debug(parse_class_init(locals()))
         self._size = size
         self._display_dims = (1, 1)
         self._app = app
         self._padding = padding
+        self._num_faces = num_faces
 
-        self._faces = _Faces()
+        self._faces = _Faces(num_faces=num_faces, size=size)
         self._centering: CenteringType | None = None
+        self._y_offset = 0.0
         self._faces_source: np.ndarray = np.array([])
         self._faces_dest: np.ndarray = np.array([])
         self._tk_image: ImageTk.PhotoImage | None = None
 
         # Set from Samples
-        self.update_source = False
+        self.update_source: bool = False
+        """Flag to indicate that the source images for the preview have been updated, so the
+        preview should be recompiled."""
         self.source: list[ConvertItem] = []  # Source images, filenames + detected faces
+        """The list of :class:`numpy.ndarray` source preview images for top row of display"""
         # Set from Patch
         self.destination: list[np.ndarray] = []  # Swapped + patched images
+        """The list of :class:`numpy.ndarray` swapped and patched preview images for bottom row of
+        display"""
 
         logger.trace("Initialized %s", self.__class__.__name__)  # type: ignore
 
     @property
     def tk_image(self) -> ImageTk.PhotoImage | None:
-        """ :class:`PIL.ImageTk.PhotoImage`: The compiled preview display in tkinter display
-        format """
+        """The compiled preview display in tkinter display format"""
         return self._tk_image
 
     @property
     def _total_columns(self) -> int:
-        """ int: The total number of images that are being displayed """
+        """The total number of images that are being displayed"""
         return len(self.source)
 
-    def set_centering(self, centering: CenteringType) -> None:
-        """ The centering that the model uses is not known at initialization time.
-        Set :attr:`_centering` when the model has been loaded.
+    def set_centering_offset(self, centering: CenteringType, y_offset: float) -> None:
+        """The centering and y-offset that the model uses is not known at initialization time.
+        Set :attr:`_centering` and y_offset when the model has been loaded.
 
         Parameters
         ----------
-        centering: str
+        centering
             The centering that the model was trained on
         """
         self._centering = centering
+        self._y_offset = y_offset
 
     def set_display_dimensions(self, dimensions: tuple[int, int]) -> None:
-        """ Adjust the size of the frame that will hold the preview samples.
+        """Adjust the size of the frame that will hold the preview samples.
 
         Parameters
         ----------
-        dimensions: tuple
+        dimensions
             The (`width`, `height`) of the frame that holds the preview
         """
         self._display_dims = dimensions
 
     def update_tk_image(self) -> None:
-        """ Build the full preview images and compile :attr:`tk_image` for display. """
+        """Build the full preview images and compile :attr:`tk_image` for display."""
         logger.trace("Updating tk image")  # type: ignore
         self._build_faces_image()
         img = np.vstack((self._faces_source, self._faces_dest))
         size = self._get_scale_size(img)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        pilimg = Image.fromarray(img)
-        pilimg = pilimg.resize(size, Image.Resampling.BICUBIC)
-        self._tk_image = ImageTk.PhotoImage(pilimg)
+        pil_img = Image.fromarray(img)
+        pil_img = pil_img.resize(size, Image.Resampling.BICUBIC)
+        self._tk_image = ImageTk.PhotoImage(pil_img)
         logger.trace("Updated tk image")  # type: ignore
 
     def _get_scale_size(self, image: np.ndarray) -> tuple[int, int]:
-        """ Get the size that the full preview image should be resized to fit in the
+        """Get the size that the full preview image should be resized to fit in the
         display window.
 
         Parameters
         ----------
-        image: :class:`numpy.ndarray`
+        image
             The full sized compiled preview image
 
         Returns
         -------
-        tuple
-            The (`width`, `height`) that the display image should be sized to fit in the display
-            window
+        The (`width`, `height`) that the display image should be sized to fit in the display window
         """
-        frameratio = float(self._display_dims[0]) / float(self._display_dims[1])
-        imgratio = float(image.shape[1]) / float(image.shape[0])
+        frame_ratio = float(self._display_dims[0]) / float(self._display_dims[1])
+        img_ratio = float(image.shape[1]) / float(image.shape[0])
 
-        if frameratio <= imgratio:
+        if frame_ratio <= img_ratio:
             scale = self._display_dims[0] / float(image.shape[1])
             size = (self._display_dims[0], max(1, int(image.shape[0] * scale)))
         else:
@@ -151,7 +165,7 @@ class FacesDisplay():  # pylint:disable=too-many-instance-attributes
         return size
 
     def _build_faces_image(self) -> None:
-        """ Compile the source and destination rows of the preview image. """
+        """Compile the source and destination rows of the preview image."""
         logger.trace("Building Faces Image")  # type: ignore
         update_all = self.update_source
         self._faces_from_frames()
@@ -164,7 +178,7 @@ class FacesDisplay():  # pylint:disable=too-many-instance-attributes
                      self._faces_dest.shape, self._faces_source.shape)
 
     def _faces_from_frames(self) -> None:
-        """ Extract the preview faces from the source frames and apply the requisite padding. """
+        """Extract the preview faces from the source frames and apply the requisite padding."""
         logger.debug("Extracting faces from frames: Number images: %s", len(self.source))
         if self.update_source:
             self._crop_source_faces()
@@ -173,44 +187,45 @@ class FacesDisplay():  # pylint:disable=too-many-instance-attributes
                      {k: len(v) for k, v in self._faces.__dict__.items()})
 
     def _crop_source_faces(self) -> None:
-        """ Extract the source faces from the source frames, along with their filenames and the
-        transformation matrix used to extract the faces. """
+        """Extract the source faces from the source frames, along with their filenames and the
+        transformation matrix used to extract the faces."""
         logger.debug("Updating source faces")
-        self._faces = _Faces()  # Init new class
-        for item in self.source:
+        self._faces = _Faces(num_faces=self._num_faces, size=self._size)  # Init new class
+        for i, item in enumerate(self.source):
             detected_face = item.inbound.detected_faces[0]
             src_img = item.inbound.image
             detected_face.load_aligned(src_img,
                                        size=self._size,
                                        centering=T.cast(CenteringType, self._centering))
             matrix = detected_face.aligned.matrix
+            if self._y_offset:
+                matrix = matrix.copy()
+                matrix[1, 2] += self._y_offset
             self._faces.filenames.append(os.path.splitext(item.inbound.filename)[0])
-            self._faces.matrix.append(matrix)
-            self._faces.src.append(transform_image(src_img, matrix, self._size, self._padding))
+            self._faces.matrix[i] = matrix
+            self._faces.src[i] = transform_image(src_img, matrix, self._size, self._padding)
         self.update_source = False
         logger.debug("Updated source faces")
 
     def _crop_destination_faces(self) -> None:
-        """ Extract the swapped faces from the swapped frames using the source face destination
-        matrices. """
+        """Extract the swapped faces from the swapped frames using the source face destination
+        matrices."""
         logger.debug("Updating destination faces")
-        self._faces.dst = []
         destination = self.destination if self.destination else [np.ones_like(src.inbound.image)
                                                                  for src in self.source]
-        for idx, image in enumerate(destination):
-            self._faces.dst.append(transform_image(image,
-                                                   self._faces.matrix[idx],
-                                                   self._size,
-                                                   self._padding))
+        for i, image in enumerate(destination):
+            self._faces.dst[i] = transform_image(image,
+                                                 self._faces.matrix[i],
+                                                 self._size,
+                                                 self._padding)
         logger.debug("Updated destination faces")
 
     def _header_text(self) -> np.ndarray:
-        """ Create the header text displaying the frame name for each preview column.
+        """Create the header text displaying the frame name for each preview column.
 
         Returns
         -------
-        :class:`numpy.ndarray`
-            The header row of the preview image containing the frame names for each column
+        The header row of the preview image containing the frame names for each column
         """
         font_scale = self._size / 640
         height = self._size // 8
@@ -241,16 +256,16 @@ class FacesDisplay():  # pylint:disable=too-many-instance-attributes
         return header_box
 
     def _draw_rect(self, image: np.ndarray) -> np.ndarray:
-        """ Place a white border around a given image.
+        """Place a white border around a given image.
 
         Parameters
         ----------
-        image: :class:`numpy.ndarray`
+        image
             The image to place a border on to
+
         Returns
         -------
-        :class:`numpy.ndarray`
-            The given image with a border drawn around the outside
+        The given image with a border drawn around the outside
         """
         cv2.rectangle(image, (0, 0), (self._size - 1, self._size - 1), (255, 255, 255), 1)
         image = np.clip(image, 0.0, 255.0)
@@ -258,13 +273,13 @@ class FacesDisplay():  # pylint:disable=too-many-instance-attributes
 
 
 class ImagesCanvas(ttk.Frame):  # pylint:disable=too-many-ancestors
-    """ tkinter Canvas that holds the preview images.
+    """tkinter Canvas that holds the preview images.
 
     Parameters
     ----------
-    app: :class:`Preview`
+    app
         The main tkinter Preview app
-    parent: tkinter object
+    parent
         The parent tkinter object that holds the canvas
     """
     def __init__(self, app: Preview, parent: ttk.PanedWindow) -> None:
@@ -276,24 +291,24 @@ class ImagesCanvas(ttk.Frame):  # pylint:disable=too-many-ancestors
         self._display: FacesDisplay = parent.preview_display  # type: ignore
         self._canvas = tk.Canvas(self, bd=0, highlightthickness=0)
         self._canvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        self._displaycanvas = self._canvas.create_image(0, 0,
-                                                        image=self._display.tk_image,
-                                                        anchor=tk.NW)
+        self._display_canvas = self._canvas.create_image(0, 0,
+                                                         image=self._display.tk_image,
+                                                         anchor=tk.NW)
         self.bind("<Configure>", self._resize)
         logger.debug("Initialized %s", self.__class__.__name__)
 
     def _resize(self, event: tk.Event) -> None:
-        """ Resize the image to fit the frame, maintaining aspect ratio """
+        """Resize the image to fit the frame, maintaining aspect ratio."""
         logger.debug("Resizing preview image")
-        framesize = (event.width, event.height)
-        self._display.set_display_dimensions(framesize)
+        frame_size = (event.width, event.height)
+        self._display.set_display_dimensions(frame_size)
         self.reload()
 
     def reload(self) -> None:
-        """ Update the images in the canvas and redraw """
+        """Update the images in the canvas and redraw."""
         logger.debug("Reloading preview image")
         self._display.update_tk_image()
-        self._canvas.itemconfig(self._displaycanvas, image=self._display.tk_image)
+        self._canvas.itemconfig(self._display_canvas, image=self._display.tk_image)
         logger.debug("Reloaded preview image")
 
 

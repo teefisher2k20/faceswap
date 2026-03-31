@@ -65,12 +65,12 @@ class BoundingBox(Editor):
             "Aligner",
             str,
             group="Aligner",
-            choices=["cv2-dnn", "FAN"],
-            default="FAN",
+            choices=["cv2-dnn", "FAN", "HRNet"],
+            default="HRNet",
             is_radio=True,
-            helptext=_("Aligner to use. FAN will obtain better alignments, but cv2-dnn can be "
-                       "useful if FAN cannot get decent alignments and you want to set a base to "
-                       "edit from."))
+            helptext=_("Aligner to use. HRNet and FAN will obtain better alignments, but cv2-dnn "
+                       "can be useful if these cannot get decent alignments and you want to set a "
+                       "base to edit from."))
         self._tk_aligner = align_ctl.tk_var
         self._add_control(align_ctl)
 
@@ -385,7 +385,10 @@ class BoundingBox(Editor):
         coords = self.scale_from_display(
             np.array(coords).reshape((2, 2))).flatten().astype("int32")
         logger.trace("out: %s", coords)
-        return (coords[0], coords[2] - coords[0], coords[1], coords[3] - coords[1])
+        return (int(coords[0]),
+                int(coords[2] - coords[0]),
+                int(coords[1]),
+                int(coords[3] - coords[1]))
 
     def _context_menu(self, event):
         """ Create a right click context menu to delete the alignment that is being

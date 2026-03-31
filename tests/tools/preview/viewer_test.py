@@ -29,11 +29,11 @@ if T.TYPE_CHECKING:
 
 def test__faces():
     """ Test the :class:`~tools.preview.viewer._Faces dataclass initializes correctly """
-    faces = _Faces()
+    faces = _Faces(5, 64)
     assert isinstance(faces.filenames, list) and not faces.filenames
-    assert isinstance(faces.matrix, list) and not faces.matrix
-    assert isinstance(faces.src, list) and not faces.src
-    assert isinstance(faces.dst, list) and not faces.dst
+    assert isinstance(faces.matrix, np.ndarray)
+    assert isinstance(faces.src, np.ndarray)
+    assert isinstance(faces.dst, np.ndarray)
 
 
 _PARAMS = ((3, 448), (4, 333), (5, 254), (6, 128))  # columns/face_size
@@ -61,11 +61,8 @@ class TestFacesDisplay():
             An instance of the FacesDisplay class at the given settings
         """
         app = MagicMock()
-        retval = FacesDisplay(app, face_size, self._padding)
-        retval._faces = _Faces(
-            matrix=[np.random.rand(2, 3) for _ in range(columns)],
-            src=[np.random.rand(face_size, face_size, 3) for _ in range(columns)],
-            dst=[np.random.rand(face_size, face_size, 3) for _ in range(columns)])
+        retval = FacesDisplay(app, face_size, self._padding, columns)
+        retval._faces = _Faces(columns, face_size)
         return retval
 
     def test_init(self) -> None:
@@ -103,12 +100,13 @@ class TestFacesDisplay():
         assert f_display._total_columns == columns
 
     def test_set_centering(self) -> None:
-        """ Test :class:`~tools.preview.viewer.FacesDisplay` set_centering method """
+        """ Test :class:`~tools.preview.viewer.FacesDisplay` set_centering_offset method """
         f_display = self.get_faces_display_instance()
         assert f_display._centering is None
         centering: CenteringType = "legacy"
-        f_display.set_centering(centering)
+        f_display.set_centering_offset(centering, 0.80)
         assert f_display._centering == centering
+        assert f_display._y_offset == 0.80
 
     def test_set_display_dimensions(self) -> None:
         """ Test :class:`~tools.preview.viewer.FacesDisplay` set_display_dimensions method """
@@ -283,16 +281,18 @@ class TestFacesDisplay():
         f_display = self.get_faces_display_instance(columns, face_size)
         f_display._centering = "face"
         f_display.update_source = True
-        f_display._faces.src = []
 
-        transform_image_mock = mocker.MagicMock()
+        transform_image_mock = mocker.MagicMock(return_value=np.zeros((face_size, face_size, 3),
+                                                                      dtype=np.uint8))
         monkeypatch.setattr("tools.preview.viewer.transform_image", transform_image_mock)
 
+
+        mats = np.random.random((columns, 2, 3)).astype(np.float32)
         f_display.source = [mocker.MagicMock() for _ in range(columns)]
         for idx, mock in enumerate(f_display.source):
             assert isinstance(mock, MagicMock)
             mock.inbound.detected_faces.__getitem__ = lambda self, x, y=mock: y
-            mock.aligned.matrix = f"test_matrix_{idx}"
+            mock.aligned.matrix = mats[idx]
             mock.inbound.filename = f"test_filename_{idx}.txt"
 
         f_display._crop_source_faces()
@@ -305,12 +305,13 @@ class TestFacesDisplay():
 
         for idx in range(columns):
             assert f_display._faces.filenames[idx] == f"test_filename_{idx}"
-            assert f_display._faces.matrix[idx] == f"test_matrix_{idx}"
+            assert np.all(f_display._faces.matrix[idx] == mats[idx])
 
     @pytest.mark.parametrize("columns, face_size", _PARAMS, ids=_IDS)
     def test__crop_destination_faces(self,
                                      columns: int,
                                      face_size: int,
+                                     monkeypatch: pytest.MonkeyPatch,
                                      mocker: pytest_mock.MockerFixture) -> None:
         """ Test :class:`~tools.preview.viewer.FacesDisplay` _crop_destination_faces method
 
@@ -325,13 +326,18 @@ class TestFacesDisplay():
         """
         f_display = self.get_faces_display_instance(columns, face_size)
         f_display._centering = "face"
-        f_display._faces.dst = []  # empty object and test populated correctly
+
+        transform_image_mock = mocker.MagicMock(return_value=np.zeros((face_size, face_size, 3),
+                                                                      dtype=np.uint8))
+        monkeypatch.setattr("tools.preview.viewer.transform_image", transform_image_mock)
+
 
         f_display.source = [mocker.MagicMock() for _ in range(columns)]
         for item in f_display.source:  # type ignore
             item.inbound.image = np.random.rand(1280, 720, 3)  # type:ignore
 
         f_display._crop_destination_faces()
+        assert transform_image_mock.call_count == columns
         assert len(f_display._faces.dst) == columns
         assert all(f.shape == (face_size, face_size, 3) for f in f_display._faces.dst)
 
