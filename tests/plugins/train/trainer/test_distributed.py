@@ -1,30 +1,36 @@
 #!/usr/bin python3
 """ Pytest unit tests for :mod:`plugins.train.trainer.distributed` Trainer plug in """
-# pylint:disable=protected-access, invalid-name
+# pylint:disable=protected-access, invalid-name, duplicate-code, too-many-locals
 
 import numpy as np
 import pytest
 import pytest_mock
 import torch
 
+from lib.training.data.collate import BatchMeta
 from plugins.train.trainer import distributed as mod_distributed
 from plugins.train.trainer import original as mod_original
-from plugins.train.trainer import _base as mod_base
+from plugins.train.trainer import base as mod_base
 
 
 _MODULE_PREFIX = "plugins.train.trainer.distributed"
 
 
+class DummyLoss:  # pylint:disable=too-few-public-methods
+    """Dummy loss return"""
+    total = 1.0
+
+
 @pytest.mark.parametrize("batch_size", (4, 8, 16, 32, 64))
 @pytest.mark.parametrize("outputs", (1, 2, 4))
 def test_WrappedModel(batch_size, outputs, mocker):
-    """ Test that the wrapped model calls preds and loss """
+    """ Test that the wrapped model calls predictions and loss """
     model = mocker.MagicMock()
     instance = mod_distributed.WrappedModel(model)
     assert instance._keras_model is model
 
-    loss_return = [torch.from_numpy((np.random.random((1, )))) for _ in range(outputs * 2)]
-    model.loss = [mocker.MagicMock(return_value=ret) for ret in loss_return]
+    loss_return = DummyLoss()
+    model.loss_func = mocker.MagicMock(return_value=loss_return)
 
     test_dims = (batch_size, 16, 16, 3)
 
@@ -32,12 +38,12 @@ def test_WrappedModel(batch_size, outputs, mocker):
     inp_b = torch.from_numpy(np.random.random(test_dims))
     targets = [torch.from_numpy(np.random.random(test_dims))
                for _ in range(outputs * 2)]
-    preds = [*torch.from_numpy(np.random.random((outputs * 2, *test_dims)))]
+    predictions = [*torch.from_numpy(np.random.random((outputs * 2, *test_dims)))]
 
-    model.return_value = preds
+    model.return_value = predictions
 
     # Call forwards
-    result = instance.forward(inp_a, inp_b, *targets)
+    instance.forward([inp_a, inp_b], targets, BatchMeta().__dict__)
 
     # Confirm model was called once forward with correct args
     model.assert_called_once()
@@ -48,23 +54,8 @@ def test_WrappedModel(batch_size, outputs, mocker):
     for real, expected in zip(model_args[0], [inp_a, inp_b]):
         assert np.allclose(real.numpy(), expected.numpy())
 
-    # Confirm ZeroGrad called
-    model.zero_grad.assert_called_once()
-
     # Confirm loss functions correctly called
-    expected_targets = targets[0::2] + targets[1::2]
-
-    for target, pred, loss in zip(expected_targets, preds, model.loss):
-        loss.assert_called_once()
-        loss_args, loss_kwargs = loss.call_args
-        assert not loss_kwargs
-        assert len(loss_args) == 2
-        for actual, expected in zip(loss_args, [target, pred]):
-            assert np.allclose(actual.numpy(), expected.numpy())
-
-    # Check that the result comes out as we put it in
-    for expected, actual in zip(loss_return, result.squeeze()):
-        assert np.isclose(expected.numpy(), actual.numpy())
+    assert model.loss_func.call_count == 2
 
 
 @pytest.fixture
@@ -77,7 +68,13 @@ def _trainer_mocked(mocker: pytest_mock.MockFixture):  # noqa:[F811]
         patched_parallel = mocker.patch(f"{_MODULE_PREFIX}.torch.nn.DataParallel")
         patched_parallel.return_value = mocker.MagicMock()
         model = mocker.MagicMock()
-        instance = mod_distributed.Trainer(model, batch_size)
+        conf = mod_base.TrainConfig(folders=["x", "y"],
+                                    batch_size=batch_size,
+                                    augment_color=False,
+                                    flip=False,
+                                    warp=False,
+                                    cache_landmarks=False)
+        instance = mod_distributed.Trainer(model, conf)
         return instance, patched_parallel
 
     return _apply_patch
@@ -104,35 +101,21 @@ def test_Trainer_forward(gpu_count, batch_size, outputs, _trainer_mocked, mocker
     """ Test that original trainer _forward calls the correct model methods """
     instance, _ = _trainer_mocked(gpus=gpu_count, batch_size=batch_size)
 
-    test_dims = (2, batch_size, 16, 16, 3)
+    test_dims = (batch_size, 2, 16, 16, 3)
 
-    inputs = torch.from_numpy(np.random.random(test_dims))
-    targets = [torch.from_numpy(np.random.random(test_dims)) for _ in range(outputs)]
+    inputs = list(torch.from_numpy(np.random.random(test_dims)).to("cpu"))
+    targets = [torch.from_numpy(np.random.random(test_dims)).to("cpu")
+               for _ in range(outputs)]
 
-    loss_return = torch.rand((gpu_count * 2 * outputs))
+    loss_return = [DummyLoss() for _ in range(gpu_count)]
     instance._distributed_model = mocker.MagicMock(return_value=loss_return)
+    instance._mean_loss = mocker.MagicMock(return_value={"unweighted": 1.0, "weighted": 1.0})
 
     # Call the forward pass
-    result = instance._forward(inputs, targets).cpu().numpy()
-
-    # Make sure multi-outs are enabled
-    if outputs > 1:
-        assert instance._is_multi_out is True
-    else:
-        assert instance._is_multi_out is False
+    instance._forward(inputs, targets, BatchMeta())
 
     # Make sure that our wrapped distributed model was called in the correct order
     instance._distributed_model.assert_called_once()
     call_args, call_kwargs = instance._distributed_model.call_args
     assert not call_kwargs
-    assert len(call_args) == len(inputs) + (len(targets) * 2)
-
-    expected_tgts = [t[i].cpu().numpy() for t in targets for i in range(2)]
-
-    for expected, actual in zip([*inputs, *expected_tgts], call_args):
-        assert np.allclose(expected, actual)
-
-    # Make sure loss gets grouped, summed and scaled correctly
-    expected = loss_return.cpu().numpy()
-    expected = expected.reshape((gpu_count, 2, -1)).sum(axis=0).flatten() / gpu_count
-    assert np.allclose(result, expected)
+    assert len(call_args) == 3

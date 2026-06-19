@@ -8,17 +8,7 @@ The training Package handles libraries to assist with training a model
    :local:
    :depth: 2
 
-.. automodapi:: lib.training.augmentation
-   :include-all-objects:
-   :no-inheritance-diagram:
-
-|
-.. automodapi:: lib.training.cache
-   :include-all-objects:
-   :no-inheritance-diagram:
-
-|
-.. automodapi:: lib.training.generator
+.. automodapi:: lib.training.loss
    :include-all-objects:
 
 |
@@ -27,6 +17,16 @@ The training Package handles libraries to assist with training a model
 
 |
 .. automodapi:: lib.training.lr_warmup
+   :include-all-objects:
+   :no-inheritance-diagram:
+
+|
+.. automodapi:: lib.training.optimizer
+   :include-all-objects:
+   :no-inheritance-diagram:
+
+|
+.. automodapi:: lib.training.preview
    :include-all-objects:
    :no-inheritance-diagram:
 
@@ -40,4 +40,27 @@ The training Package handles libraries to assist with training a model
 
 |
 .. automodapi:: lib.training.tensorboard
+   :include-all-objects:
+
+|
+.. automodapi:: lib.training.train
+   :include-all-objects:
+
+|
+data package
+============
+
+.. automodapi:: lib.training.data.augmentation
+   :include-all-objects:
+
+|
+.. automodapi:: lib.training.data.collate
+   :include-all-objects:
+
+|
+.. automodapi:: lib.training.data.data_set
+   :include-all-objects:
+
+|
+.. automodapi:: lib.training.data.loader
    :include-all-objects:

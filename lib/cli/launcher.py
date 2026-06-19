@@ -11,6 +11,7 @@ from importlib import import_module
 
 from lib.gpu_stats import GPUStats
 from lib.logger import crash_log, log_setup
+from lib.system.system import VALID_TORCH
 from lib.utils import (FaceswapError, get_backend, get_torch_version,
                        get_module_objects, safe_shutdown, set_backend)
 
@@ -24,15 +25,14 @@ logger = logging.getLogger(__name__)
 class ScriptExecutor():
     """Loads the relevant script modules and executes the script.
 
-        This class is initialized in each of the arg parsers for the relevant
-        command, then execute script is called within their set_default
-        function.
+    This class is initialized in each of the arg parsers for the relevant command, then execute
+    script is called within their set_default function.
 
-        Parameters
-        ----------
-        command
-            The faceswap command that is being executed
-        """
+    Parameters
+    ----------
+    command
+        The faceswap command that is being executed
+    """
     def __init__(self, command: str) -> None:
         self._command = command.lower()
 
@@ -76,10 +76,9 @@ class ScriptExecutor():
         Raises
         ------
         FaceswapError
-            If PyTorch is not found, or is not between versions 2.3 and 2.9
+            If PyTorch is not found, or is not between versions 2.3 and 2.11
         """
-        min_ver = (2, 3)
-        max_ver = (2, 9)
+        min_ver, max_ver = VALID_TORCH
         try:
             import torch  # noqa:F401 pylint:disable=unused-import,import-outside-toplevel
         except ImportError as err:

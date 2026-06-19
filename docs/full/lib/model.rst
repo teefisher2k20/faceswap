@@ -33,9 +33,22 @@ networks package
    :include-all-objects:
    :noindex:
 
-|
-.. automodapi:: lib.model.networks.simple_nets
+optimizers package
+==================
+
+.. automodapi:: lib.model.optimizers.adabelief
    :include-all-objects:
+   :noindex:
+
+|
+.. automodapi:: lib.model.optimizers.lion
+   :include-all-objects:
+   :noindex:
+
+|
+.. automodapi:: lib.model.optimizers.keras_legacy
+   :include-all-objects:
+   :noindex:
 
 model package
 =============
@@ -64,8 +77,4 @@ model package
 
 |
 .. automodapi:: lib.model.normalization
-   :include-all-objects:
-
-|
-.. automodapi:: lib.model.optimizers
    :include-all-objects:
